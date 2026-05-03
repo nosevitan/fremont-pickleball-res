@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Scan upcoming pickleball bookings from ActiveNet account.
-Saves results as a JSON GitHub variable (UPCOMING_BOOKINGS).
+Uses the family schedule API. Saves results as UPCOMING_BOOKINGS GitHub variable.
 """
 
 import os
 import sys
 import json
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -39,73 +39,64 @@ def scan():
         page.wait_for_url(lambda url: "/signin" not in url, timeout=15000)
         page.wait_for_timeout(2000)
 
-        # Go to upcoming reservations
-        page.goto(f"{BASE_URL}/reservation/reservations", wait_until="domcontentloaded")
+        # Navigate to family schedule to establish session
+        page.goto(
+            f"{BASE_URL}/myaccount/familymemberschedule?memberIds=86022&view=3",
+            wait_until="domcontentloaded",
+        )
         page.wait_for_timeout(3000)
 
-        # Try to find reservation entries
-        bookings = page.evaluate("""
-            () => {
-                const results = [];
-                // Look for reservation cards/rows
-                const items = document.querySelectorAll(
-                    '[class*="reservation-item"], [class*="booking"], tr[class*="reservation"], ' +
-                    '[class*="card"], [class*="event-item"], [class*="list-item"]'
-                );
+        # Fetch schedule via API (handles CSRF/cookies automatically)
+        today = datetime.now(PT)
+        start_date = today.strftime("%Y-%m-%d")
+        end_date = (today + timedelta(days=30)).strftime("%Y-%m-%d")
 
-                for (const item of items) {
-                    const text = item.textContent || '';
-                    // Only include pickleball-related entries
-                    if (text.toLowerCase().includes('pickleball') || text.toLowerCase().includes('ftc')) {
-                        results.push(text.replace(/\\s+/g, ' ').trim().substring(0, 200));
-                    }
-                }
-
-                // If no structured items found, try to get all text that mentions pickleball
-                if (results.length === 0) {
-                    const allText = document.body.innerText;
-                    const lines = allText.split('\\n').filter(l =>
-                        l.toLowerCase().includes('pickleball') || l.toLowerCase().includes('ftc')
+        data = page.evaluate("""
+            async ([startDate, endDate]) => {
+                try {
+                    const resp = await fetch(
+                        `/fremont/rest/myaccount/familyschedules?start_date=${startDate}&end_date=${endDate}&locale=en-US`,
+                        { credentials: 'include' }
                     );
-                    for (const line of lines.slice(0, 20)) {
-                        const trimmed = line.trim();
-                        if (trimmed.length > 10) results.push(trimmed.substring(0, 200));
-                    }
+                    return await resp.json();
+                } catch (e) {
+                    return { error: e.message };
                 }
-
-                return results;
             }
-        """)
-
-        # Also try the account page for reservations
-        if not bookings:
-            page.goto(f"{BASE_URL}/myaccount", wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
-
-            # Look for upcoming reservations section
-            reservations_link = page.locator("a:has-text('Reservations'), a:has-text('Upcoming'), a:has-text('My Reservations')")
-            if reservations_link.count() > 0:
-                reservations_link.first.click()
-                page.wait_for_timeout(3000)
-
-                bookings = page.evaluate("""
-                    () => {
-                        const text = document.body.innerText;
-                        const lines = text.split('\\n').filter(l =>
-                            l.toLowerCase().includes('pickleball') || l.toLowerCase().includes('ftc') || l.toLowerCase().includes('court')
-                        );
-                        return lines.filter(l => l.trim().length > 10).map(l => l.trim().substring(0, 200)).slice(0, 20);
-                    }
-                """)
+        """, [start_date, end_date])
 
         browser.close()
 
-        # Format as structured data
-        formatted = []
-        for b in bookings:
-            formatted.append({"description": b})
+        # Parse response: body.schedules[]
+        bookings = []
+        schedules = []
+        if isinstance(data, dict):
+            body = data.get("body", {})
+            if isinstance(body, dict):
+                schedules = body.get("schedules", [])
 
-        return formatted
+        for item in schedules:
+            facilities = item.get("facilities", [])
+            facility_name = facilities[0]["facility_name"] if facilities else ""
+            centers = item.get("centers", [])
+            center_name = centers[0]["name"] if centers else ""
+
+            bookings.append({
+                "date": item.get("schedule_date", ""),
+                "time": item.get("time_text", ""),
+                "court": facility_name,
+                "center": center_name,
+                "event": item.get("activity_name", ""),
+            })
+
+        # Sort by date
+        bookings.sort(key=lambda b: b.get("date", ""))
+
+        # Only keep future bookings
+        today_str = today.strftime("%Y-%m-%d")
+        bookings = [b for b in bookings if b.get("date", "") >= today_str]
+
+        return bookings
 
 
 if __name__ == "__main__":
@@ -113,9 +104,8 @@ if __name__ == "__main__":
     result = json.dumps(bookings)
     print(f"Found {len(bookings)} upcoming bookings")
     for b in bookings:
-        print(f"  - {b['description']}")
+        print(f"  - {b['date']} {b['time']} @ {b['court']}")
 
-    # Save to GitHub variable if running in CI
     if os.getenv("GITHUB_ACTIONS"):
         subprocess.run(
             ["gh", "variable", "set", "UPCOMING_BOOKINGS", "--body", result,

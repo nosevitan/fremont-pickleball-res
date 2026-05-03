@@ -10,7 +10,20 @@ interface LastBooking {
 }
 
 interface Booking {
-  description: string;
+  date: string;
+  time: string;
+  court: string;
+  center: string;
+  event: string;
+}
+
+function formatDate(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
+function formatCourt(court: string): string {
+  return court.replace("FTC Pickleball ", "").replace("FTC ", "");
 }
 
 export default function Home() {
@@ -228,8 +241,14 @@ export default function Home() {
         ) : (
           <div className="space-y-2">
             {upcomingBookings.map((b, i) => (
-              <div key={i} className="bg-zinc-800/50 rounded-lg p-3 border border-zinc-700/50">
-                <p className="text-sm text-zinc-300">{b.description}</p>
+              <div key={i} className="bg-zinc-800/50 rounded-lg p-3 border border-zinc-700/50 flex justify-between items-center">
+                <div>
+                  <p className="text-sm font-medium text-zinc-200">{formatDate(b.date)}</p>
+                  <p className="text-xs text-zinc-400">{b.time}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-pickle font-medium">{formatCourt(b.court)}</p>
+                </div>
               </div>
             ))}
           </div>
