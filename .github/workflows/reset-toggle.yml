@@ -1,0 +1,16 @@
+name: Reset Booking Toggle
+
+on:
+  schedule:
+    - cron: "0 8 * * *"  # 1:00am PT (08:00 UTC during PDT)
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set BOOKING_ENABLED to false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh variable set BOOKING_ENABLED --body "false" --repo nosevitan/fremont-pickleball-res
+          echo "Toggle reset to OFF"
