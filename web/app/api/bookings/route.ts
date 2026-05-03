@@ -52,7 +52,7 @@ export async function GET() {
       const [k, v] = kv.split("=");
       if (k && v) cookieMap.set(k.trim(), v.trim());
     });
-    allCookies = [...cookieMap].map(([k, v]) => `${k}=${v}`).join("; ");
+    allCookies = Array.from(cookieMap.entries()).map(([k, v]) => `${k}=${v}`).join("; ");
 
     // Step 3: Fetch family schedules
     const today = new Date();
@@ -88,7 +88,13 @@ export async function GET() {
     const todayStr = startDate;
     const futureBookings = bookings.filter((b) => b.date >= todayStr);
 
-    return NextResponse.json({ bookings: futureBookings });
+    // If we got bookings, return them
+    if (futureBookings.length > 0) {
+      return NextResponse.json({ bookings: futureBookings });
+    }
+
+    // If empty, fall through to cached data
+    throw new Error("No bookings from live API, trying cache");
   } catch (error) {
     console.error("Failed to fetch bookings:", error);
 
