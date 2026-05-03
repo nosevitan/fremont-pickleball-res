@@ -3,12 +3,65 @@
 import { useState, useEffect, useCallback } from "react";
 
 export default function Home() {
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState(false);
+
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [nextBookingDate, setNextBookingDate] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [booking, setBooking] = useState(false);
   const [bookingResult, setBookingResult] = useState<string | null>(null);
+
+  // Check if already authed by trying to hit the status endpoint
+  useEffect(() => {
+    fetch("/api/status")
+      .then((res) => {
+        if (res.ok) {
+          setAuthed(true);
+          return res.json();
+        }
+        setAuthed(false);
+        setLoading(false);
+        return null;
+      })
+      .then((data) => {
+        if (data) {
+          setEnabled(data.enabled);
+          setNextBookingDate(data.nextBookingDate);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        setAuthed(false);
+        setLoading(false);
+      });
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(false);
+    const res = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (res.ok) {
+      setAuthed(true);
+      setPassword("");
+      // Fetch status after auth
+      const statusRes = await fetch("/api/status");
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        setEnabled(data.enabled);
+        setNextBookingDate(data.nextBookingDate);
+      }
+      setLoading(false);
+    } else {
+      setAuthError(true);
+    }
+  };
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -18,14 +71,8 @@ export default function Home() {
       setNextBookingDate(data.nextBookingDate);
     } catch {
       console.error("Failed to fetch status");
-    } finally {
-      setLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
 
   const handleToggle = async () => {
     if (enabled === null || toggling) return;
@@ -64,7 +111,8 @@ export default function Home() {
     }
   };
 
-  if (loading) {
+  // Loading
+  if (authed === null || (authed && loading)) {
     return (
       <main className="flex min-h-screen items-center justify-center">
         <div className="animate-pulse text-zinc-500 text-lg">Loading...</div>
@@ -72,9 +120,40 @@ export default function Home() {
     );
   }
 
+  // Password screen
+  if (!authed) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center px-6 gap-6">
+        <div className="text-center space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight">PickleBook</h1>
+          <p className="text-zinc-500 text-sm">Enter password to continue</p>
+        </div>
+        <form onSubmit={handleLogin} className="w-full max-w-xs space-y-4">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            autoFocus
+            className="w-full px-4 py-3 rounded-xl bg-zinc-800 border border-zinc-700 text-white placeholder-zinc-500 focus:outline-none focus:border-pickle focus:ring-1 focus:ring-pickle"
+          />
+          {authError && (
+            <p className="text-red-400 text-sm text-center">Wrong password</p>
+          )}
+          <button
+            type="submit"
+            className="w-full py-3 rounded-xl bg-pickle text-white font-semibold hover:bg-pickle-dark active:scale-[0.98] transition-all"
+          >
+            Enter
+          </button>
+        </form>
+      </main>
+    );
+  }
+
+  // Main app
   return (
     <main className="flex min-h-screen flex-col items-center justify-center px-6 py-12 gap-10">
-      {/* Header */}
       <div className="text-center space-y-1">
         <h1 className="text-2xl font-bold tracking-tight">
           Pickleball Auto-Booker
@@ -82,12 +161,11 @@ export default function Home() {
         <p className="text-zinc-500 text-sm">Fremont courts</p>
       </div>
 
-      {/* Toggle */}
       <div className="flex flex-col items-center gap-6">
         <button
           onClick={handleToggle}
           disabled={toggling}
-          aria-label={`Auto-booking is ${enabled ? "enabled" : "disabled"}. Click to ${enabled ? "disable" : "enable"}.`}
+          aria-label={`Auto-booking is ${enabled ? "enabled" : "disabled"}.`}
           role="switch"
           aria-checked={enabled ?? false}
           className={`
@@ -106,7 +184,6 @@ export default function Home() {
           />
         </button>
 
-        {/* Status */}
         <div className="text-center space-y-2">
           <p className="text-lg font-medium">
             {enabled ? (
@@ -121,7 +198,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Book Now */}
       <div className="flex flex-col items-center gap-3 w-full max-w-xs">
         <button
           onClick={handleBookNow}
@@ -141,7 +217,7 @@ export default function Home() {
 
         {bookingResult && (
           <p
-            className={`text-sm text-center animate-fade-in ${
+            className={`text-sm text-center ${
               bookingResult.includes("success")
                 ? "text-pickle"
                 : "text-red-400"
