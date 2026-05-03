@@ -119,19 +119,49 @@ export default function Home() {
   const handleBookNow = async () => {
     if (booking) return;
     setBooking(true);
-    setBookingResult(null);
+    setBookingResult("Starting...");
     try {
       const res = await fetch("/api/book-now", { method: "POST" });
-      if (res.ok) {
-        setBookingResult("Workflow triggered successfully");
-      } else {
+      if (!res.ok) {
         setBookingResult("Failed to trigger workflow");
+        setBooking(false);
+        return;
       }
+      setBookingResult("Booking in progress...");
+
+      // Poll workflow status every 10s for up to 5 minutes
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 10000));
+        try {
+          const statusRes = await fetch("/api/workflow-status");
+          const statusData = await statusRes.json();
+
+          if (statusData.status === "completed") {
+            if (statusData.conclusion === "success" && statusData.lastBooking?.status === "success") {
+              const court = statusData.lastBooking.court || "Court";
+              setBookingResult(`Booked! ${court}`);
+            } else if (statusData.conclusion === "success") {
+              setBookingResult("Completed — no slots available");
+            } else {
+              setBookingResult(`Failed (${statusData.conclusion || "unknown"})`);
+            }
+            // Refresh bookings list
+            fetch("/api/bookings")
+              .then((r) => r.ok ? r.json() : { bookings: [] })
+              .then((d) => setUpcomingBookings(d.bookings || []));
+            setBooking(false);
+            return;
+          }
+          setBookingResult(`Booking in progress... (${Math.floor((i + 1) * 10 / 60)}m ${((i + 1) * 10) % 60}s)`);
+        } catch {
+          // Keep polling
+        }
+      }
+      setBookingResult("Timed out — check GitHub Actions");
     } catch {
       setBookingResult("Failed to trigger workflow");
     } finally {
       setBooking(false);
-      setTimeout(() => setBookingResult(null), 4000);
     }
   };
 
