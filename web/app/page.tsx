@@ -2,6 +2,17 @@
 
 import { useState, useEffect, useCallback } from "react";
 
+interface LastBooking {
+  status: string;
+  date: string;
+  court: string;
+  timestamp: string;
+}
+
+interface Booking {
+  description: string;
+}
+
 export default function Home() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
@@ -9,12 +20,13 @@ export default function Home() {
 
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [nextBookingDate, setNextBookingDate] = useState<string>("");
+  const [lastBooking, setLastBooking] = useState<LastBooking | null>(null);
+  const [upcomingBookings, setUpcomingBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [booking, setBooking] = useState(false);
   const [bookingResult, setBookingResult] = useState<string | null>(null);
 
-  // Check if already authed by trying to hit the status endpoint
   useEffect(() => {
     fetch("/api/status")
       .then((res) => {
@@ -30,6 +42,7 @@ export default function Home() {
         if (data) {
           setEnabled(data.enabled);
           setNextBookingDate(data.nextBookingDate);
+          setLastBooking(data.lastBooking);
           setLoading(false);
         }
       })
@@ -38,6 +51,15 @@ export default function Home() {
         setLoading(false);
       });
   }, []);
+
+  // Fetch upcoming bookings
+  useEffect(() => {
+    if (!authed) return;
+    fetch("/api/bookings")
+      .then((res) => res.ok ? res.json() : { bookings: [] })
+      .then((data) => setUpcomingBookings(data.bookings || []))
+      .catch(() => setUpcomingBookings([]));
+  }, [authed]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,29 +72,18 @@ export default function Home() {
     if (res.ok) {
       setAuthed(true);
       setPassword("");
-      // Fetch status after auth
       const statusRes = await fetch("/api/status");
       if (statusRes.ok) {
         const data = await statusRes.json();
         setEnabled(data.enabled);
         setNextBookingDate(data.nextBookingDate);
+        setLastBooking(data.lastBooking);
       }
       setLoading(false);
     } else {
       setAuthError(true);
     }
   };
-
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch("/api/status");
-      const data = await res.json();
-      setEnabled(data.enabled);
-      setNextBookingDate(data.nextBookingDate);
-    } catch {
-      console.error("Failed to fetch status");
-    }
-  }, []);
 
   const handleToggle = async () => {
     if (enabled === null || toggling) return;
@@ -111,7 +122,6 @@ export default function Home() {
     }
   };
 
-  // Loading
   if (authed === null || (authed && loading)) {
     return (
       <main className="flex min-h-screen items-center justify-center">
@@ -120,7 +130,6 @@ export default function Home() {
     );
   }
 
-  // Password screen
   if (!authed) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center px-6 gap-6">
@@ -151,26 +160,23 @@ export default function Home() {
     );
   }
 
-  // Main app
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center px-6 py-12 gap-10">
+    <main className="flex min-h-screen flex-col items-center px-6 py-12 gap-8">
+      {/* Header */}
       <div className="text-center space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">
-          Pickleball Auto-Booker
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight">PickleBook</h1>
         <p className="text-zinc-500 text-sm">Fremont courts</p>
       </div>
 
-      <div className="flex flex-col items-center gap-6">
+      {/* Toggle */}
+      <div className="flex flex-col items-center gap-5">
         <button
           onClick={handleToggle}
           disabled={toggling}
-          aria-label={`Auto-booking is ${enabled ? "enabled" : "disabled"}.`}
           role="switch"
           aria-checked={enabled ?? false}
           className={`
-            relative w-28 h-14 rounded-full transition-colors duration-300 ease-in-out
-            focus:outline-none focus-visible:ring-4 focus-visible:ring-pickle/40
+            relative w-28 h-14 rounded-full transition-colors duration-300
             ${toggling ? "opacity-60 cursor-wait" : "cursor-pointer"}
             ${enabled ? "bg-pickle" : "bg-zinc-700"}
           `}
@@ -178,34 +184,65 @@ export default function Home() {
           <span
             className={`
               absolute top-1.5 left-1.5 w-11 h-11 rounded-full bg-white shadow-md
-              transition-transform duration-300 ease-in-out
+              transition-transform duration-300
               ${enabled ? "translate-x-14" : "translate-x-0"}
             `}
           />
         </button>
 
-        <div className="text-center space-y-2">
+        <div className="text-center space-y-1">
           <p className="text-lg font-medium">
             {enabled ? (
-              <span className="text-pickle">Enabled</span>
+              <span className="text-pickle">Auto-book ON</span>
             ) : (
-              <span className="text-zinc-400">Disabled</span>
+              <span className="text-zinc-400">Auto-book OFF</span>
             )}
           </p>
           <p className="text-zinc-500 text-sm">
-            Next booking: <span className="text-zinc-300">{nextBookingDate}</span>
+            Next: <span className="text-zinc-300">{nextBookingDate}</span>
           </p>
         </div>
       </div>
 
-      <div className="flex flex-col items-center gap-3 w-full max-w-xs">
+      {/* Last Booking Result */}
+      {lastBooking && (
+        <div className={`w-full max-w-xs rounded-xl p-4 ${
+          lastBooking.status === "success" ? "bg-pickle/10 border border-pickle/30" : "bg-red-500/10 border border-red-500/30"
+        }`}>
+          <p className="text-xs text-zinc-500 uppercase tracking-wide mb-1">Last Booking</p>
+          <p className={`font-semibold ${lastBooking.status === "success" ? "text-pickle" : "text-red-400"}`}>
+            {lastBooking.status === "success" ? "Booked" : "Failed"}
+          </p>
+          {lastBooking.court && (
+            <p className="text-sm text-zinc-300 mt-1">{lastBooking.court}</p>
+          )}
+          <p className="text-sm text-zinc-400">{lastBooking.date}</p>
+        </div>
+      )}
+
+      {/* Upcoming Bookings */}
+      <div className="w-full max-w-xs">
+        <p className="text-xs text-zinc-500 uppercase tracking-wide mb-3">Upcoming Bookings</p>
+        {upcomingBookings.length === 0 ? (
+          <p className="text-zinc-600 text-sm">No bookings</p>
+        ) : (
+          <div className="space-y-2">
+            {upcomingBookings.map((b, i) => (
+              <div key={i} className="bg-zinc-800/50 rounded-lg p-3 border border-zinc-700/50">
+                <p className="text-sm text-zinc-300">{b.description}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Book Now */}
+      <div className="flex flex-col items-center gap-3 w-full max-w-xs mt-2">
         <button
           onClick={handleBookNow}
           disabled={booking}
           className={`
-            w-full py-3.5 px-6 rounded-xl font-semibold text-sm tracking-wide
-            transition-all duration-200
-            focus:outline-none focus-visible:ring-4 focus-visible:ring-pickle/40
+            w-full py-3.5 px-6 rounded-xl font-semibold text-sm tracking-wide transition-all
             ${booking
               ? "bg-zinc-700 text-zinc-400 cursor-wait"
               : "bg-zinc-800 text-white hover:bg-zinc-700 active:scale-[0.98]"
@@ -216,13 +253,9 @@ export default function Home() {
         </button>
 
         {bookingResult && (
-          <p
-            className={`text-sm text-center ${
-              bookingResult.includes("success")
-                ? "text-pickle"
-                : "text-red-400"
-            }`}
-          >
+          <p className={`text-sm text-center ${
+            bookingResult.includes("success") ? "text-pickle" : "text-red-400"
+          }`}>
             {bookingResult}
           </p>
         )}

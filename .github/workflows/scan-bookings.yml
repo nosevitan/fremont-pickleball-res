@@ -1,0 +1,33 @@
+name: Scan Upcoming Bookings
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - run: python -m playwright install chromium --with-deps
+
+      - name: Create .env file
+        run: |
+          cat <<EOF > .env
+          ACTIVENET_USERNAME=${{ secrets.ACTIVENET_USERNAME }}
+          ACTIVENET_PASSWORD=${{ secrets.ACTIVENET_PASSWORD }}
+          ACTIVENET_CUSTOMER_ID=${{ secrets.ACTIVENET_CUSTOMER_ID }}
+          EOF
+
+      - name: Scan bookings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scan_bookings.py

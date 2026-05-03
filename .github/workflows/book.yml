@@ -47,8 +47,40 @@ jobs:
           EOF
 
       - name: Run booking script
+        id: booking
         if: env.BOOKING_ENABLED == 'true'
-        run: python book.py
+        run: |
+          if python book.py; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save booking result
+        if: env.BOOKING_ENABLED == 'true' && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RESULT="${{ steps.booking.outputs.result || 'failed' }}"
+          DATE=$(python3 -c "from datetime import datetime, timedelta; print((datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d'))")
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Read the last log line for details
+          DETAIL=$(tail -1 logs/book_*.log 2>/dev/null | head -c 200 || echo "No details")
+
+          # Find court and time from logs
+          COURT=$(grep -o "BOOKING.*SUCCESSFUL.*" logs/book_*.log 2>/dev/null | tail -1 | head -c 200 || echo "")
+          if [ -z "$COURT" ]; then
+            COURT=$(grep -o "Court [A-D].*4:00-6:00 PM" logs/book_*.log 2>/dev/null | tail -1 || echo "")
+          fi
+
+          gh variable set LAST_BOOKING_RESULT --body "{\"status\":\"$RESULT\",\"date\":\"$DATE\",\"court\":\"$COURT\",\"timestamp\":\"$TIMESTAMP\"}" --repo nosevitan/fremont-pickleball-res
+
+      - name: Scan upcoming bookings
+        if: env.BOOKING_ENABLED == 'true' && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scan_bookings.py || true
 
       - name: Upload screenshots and logs
         if: always()

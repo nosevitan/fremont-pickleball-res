@@ -12,18 +12,10 @@ function getNextBookingDate(): string {
   });
 }
 
-export async function GET() {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    return NextResponse.json(
-      { error: "GITHUB_TOKEN not configured" },
-      { status: 500 }
-    );
-  }
-
+async function fetchVariable(token: string, name: string): Promise<string | null> {
   try {
     const res = await fetch(
-      `https://api.github.com/repos/${REPO}/actions/variables/BOOKING_ENABLED`,
+      `https://api.github.com/repos/${REPO}/actions/variables/${name}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -33,26 +25,42 @@ export async function GET() {
         cache: "no-store",
       }
     );
-
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("GitHub API error:", res.status, text);
-      return NextResponse.json(
-        { enabled: false, nextBookingDate: getNextBookingDate() }
-      );
-    }
-
+    if (!res.ok) return null;
     const data = await res.json();
-    const enabled = data.value === "true";
+    return data.value || null;
+  } catch {
+    return null;
+  }
+}
 
-    return NextResponse.json({
-      enabled,
-      nextBookingDate: getNextBookingDate(),
-    });
-  } catch (error) {
-    console.error("Failed to fetch status:", error);
+export async function GET() {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
     return NextResponse.json(
-      { enabled: false, nextBookingDate: getNextBookingDate() }
+      { error: "GITHUB_TOKEN not configured" },
+      { status: 500 }
     );
   }
+
+  const [enabledVal, lastResultVal] = await Promise.all([
+    fetchVariable(token, "BOOKING_ENABLED"),
+    fetchVariable(token, "LAST_BOOKING_RESULT"),
+  ]);
+
+  const enabled = enabledVal === "true";
+  let lastBooking = null;
+
+  if (lastResultVal) {
+    try {
+      lastBooking = JSON.parse(lastResultVal);
+    } catch {
+      lastBooking = null;
+    }
+  }
+
+  return NextResponse.json({
+    enabled,
+    nextBookingDate: getNextBookingDate(),
+    lastBooking,
+  });
 }
