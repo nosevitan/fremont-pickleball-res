@@ -49,9 +49,6 @@ PREFERRED_COURTS = [
     ("FTC Pickleball Court C", 367),
     ("FTC Pickleball Court A", 365),
     ("FTC Pickleball Court B", 366),
-    ("FTC Orange Ball/Pickleball Court 1", 361),
-    ("FTC Orange Ball/Pickleball Court 2", 362),
-    ("FTC Orange Ball/Pickleball Court 3", 363),
 ]
 
 # Target 30-min slot start times (24h format) -- covers the 4:00-6:00pm window
