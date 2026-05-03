@@ -1,0 +1,60 @@
+name: Book Pickleball Court
+
+on:
+  schedule:
+    - cron: "25 14 * * *"  # 7:25am PT (14:25 UTC during PDT)
+  workflow_dispatch:
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Check if booking is enabled
+        run: |
+          if [ "${{ vars.BOOKING_ENABLED }}" != "true" ]; then
+            echo "Booking disabled, skipping"
+            exit 0
+          fi
+          echo "BOOKING_ENABLED=true" >> "$GITHUB_ENV"
+
+      - name: Set up Python 3.11
+        if: env.BOOKING_ENABLED == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: env.BOOKING_ENABLED == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        if: env.BOOKING_ENABLED == 'true'
+        run: python -m playwright install chromium --with-deps
+
+      - name: Create .env file
+        if: env.BOOKING_ENABLED == 'true'
+        run: |
+          cat <<EOF > .env
+          ACTIVENET_USERNAME=${{ secrets.ACTIVENET_USERNAME }}
+          ACTIVENET_PASSWORD=${{ secrets.ACTIVENET_PASSWORD }}
+          ACTIVENET_CUSTOMER_ID=${{ secrets.ACTIVENET_CUSTOMER_ID }}
+          EOF
+
+      - name: Run booking script
+        if: env.BOOKING_ENABLED == 'true'
+        run: python book.py
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: booking-artifacts
+          path: |
+            screenshots/
+            logs/
+          if-no-files-found: ignore
