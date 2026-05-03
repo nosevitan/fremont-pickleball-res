@@ -45,10 +45,10 @@ PT = ZoneInfo("America/Los_Angeles")
 
 # Courts in priority order
 PREFERRED_COURTS = [
+    ("FTC Pickleball Court D", 368),
+    ("FTC Pickleball Court C", 367),
     ("FTC Pickleball Court A", 365),
     ("FTC Pickleball Court B", 366),
-    ("FTC Pickleball Court C", 367),
-    ("FTC Pickleball Court D", 368),
     ("FTC Orange Ball/Pickleball Court 1", 361),
     ("FTC Orange Ball/Pickleball Court 2", 362),
     ("FTC Orange Ball/Pickleball Court 3", 363),
@@ -304,7 +304,7 @@ def scan_availability(page) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Book via API (fast path) -- inject fetch from browser context
 # ---------------------------------------------------------------------------
-def book_via_api(page, target_date: datetime, resource_id: int, slot_24h: str, court_name: str) -> bool:
+def book_via_api(page, target_date: datetime, resource_id: int, slot_24h_list, court_name: str) -> bool:
     """
     Fire the booking API directly from the browser context so cookies/CSRF
     are handled automatically. Two calls: availability check, then process.
@@ -358,7 +358,7 @@ def book_via_api(page, target_date: datetime, resource_id: int, slot_24h: str, c
         "time_increment": 30,
         "selected_resources": [
             {
-                "bookings": [slot_24h],
+                "bookings": slot_24h_list if isinstance(slot_24h_list, list) else [slot_24h_list],
                 "attendance": 1,
                 "package_id": 0,
                 "resource_id": resource_id,
@@ -371,7 +371,8 @@ def book_via_api(page, target_date: datetime, resource_id: int, slot_24h: str, c
         "last_modify_timestamp": -1,
     }
 
-    log.info(f"API: booking {court_name} @ {slot_24h} on {date_str} (resource_id={resource_id}) ...")
+    slots_display = slot_24h_list if isinstance(slot_24h_list, list) else [slot_24h_list]
+    log.info(f"API: booking {court_name} @ {slots_display} on {date_str} (resource_id={resource_id}) ...")
     process_result = page.evaluate("""
         async (body) => {
             try {
@@ -636,91 +637,150 @@ def run(dry_run: bool = False, target_date=None, skip_wait: bool = False):
                     browser.close()
                     return False
 
-            # Pick the best slot (first in list = highest priority court + earliest time)
-            best = available[0]
-            log.info(f"SELECTED: {best['court_name']} @ {best['start_display']}-{best['end_display']}")
+            # Find a court where ALL 4 slots (4:00-6:00pm) are available
+            best_court = None
+            best_slots = []
+            for court_name, resource_id in PREFERRED_COURTS:
+                court_slots = [s for s in available if s["court_name"] == court_name]
+                if len(court_slots) == len(TARGET_SLOTS_24H):
+                    best_court = (court_name, resource_id)
+                    best_slots = court_slots
+                    log.info(f"SELECTED: {court_name} -- all 4 slots available (4:00-6:00 PM)")
+                    break
+                elif court_slots:
+                    log.info(f"  {court_name}: only {len(court_slots)}/{len(TARGET_SLOTS_24H)} slots available, skipping")
+
+            if not best_court:
+                log.error("No court has all 4 slots (4:00-6:00 PM) available")
+                screenshot(page, "no_full_block")
+                browser.close()
+                return False
 
             if dry_run:
                 log.info("DRY RUN -- would book:")
-                log.info(f"  Court: {best['court_name']} (resource_id={best['resource_id']})")
-                log.info(f"  Slot : {best['slot_24h']} ({best['start_display']}-{best['end_display']})")
+                log.info(f"  Court: {best_court[0]} (resource_id={best_court[1]})")
                 log.info(f"  Date : {date_str}")
-
-                # In dry-run, also show all available options
-                if len(available) > 1:
-                    log.info(f"Other available options ({len(available) - 1}):")
-                    for opt in available[1:]:
-                        log.info(f"  {opt['court_name']} @ {opt['start_display']}-{opt['end_display']}")
-
+                for s in best_slots:
+                    log.info(f"  Slot : {s['slot_24h']} ({s['start_display']}-{s['end_display']})")
                 browser.close()
                 return True
 
             # ----------------------------------------------------------
-            # Phase 4: Book (API fast path, UI fallback)
+            # Phase 4: Book all 4 slots (API fast path, UI fallback)
             # ----------------------------------------------------------
-            log.info("--- Phase 4: Booking ---")
+            log.info("--- Phase 4: Booking 2-hour block ---")
             screenshot(page, "pre_booking")
 
             # Try API first (faster, no UI delays)
             api_success = False
-            for attempt in range(3):
-                log.info(f"API booking attempt {attempt + 1}/3")
+            courts_to_try = [(best_court, best_slots)]
+            # Build fallback list of courts with full blocks
+            for court_name, resource_id in PREFERRED_COURTS:
+                if court_name == best_court[0]:
+                    continue
+                court_slots = [s for s in available if s["court_name"] == court_name]
+                if len(court_slots) == len(TARGET_SLOTS_24H):
+                    courts_to_try.append(((court_name, resource_id), court_slots))
+
+            for attempt, (court, slots) in enumerate(courts_to_try[:3]):
+                log.info(f"API booking attempt {attempt + 1}/{min(len(courts_to_try), 3)} -- {court[0]}")
                 try:
                     api_success = book_via_api(
                         page,
                         target_date,
-                        best["resource_id"],
-                        best["slot_24h"],
-                        best["court_name"],
+                        court[1],
+                        [s["slot_24h"] for s in slots],
+                        court[0],
                     )
                     if api_success:
+                        best_court = court
+                        best_slots = slots
                         break
                 except Exception as e:
                     log.warning(f"API attempt {attempt + 1} error: {e}")
 
-                # If first choice failed, try next available slot
-                if not api_success and len(available) > attempt + 1:
-                    best = available[attempt + 1]
-                    log.info(f"Trying next option: {best['court_name']} @ {best['start_display']}")
-
             if api_success:
                 log.info("=" * 60)
-                log.info("BOOKING SUCCESSFUL (API)")
-                log.info(f"  {best['court_name']} @ {best['start_display']}-{best['end_display']}")
+                log.info("BOOKING SUCCESSFUL (API) -- 2 hour block")
+                log.info(f"  {best_court[0]} @ 4:00-6:00 PM")
                 log.info(f"  Date: {date_str}")
                 log.info("=" * 60)
                 screenshot(page, "booking_success")
                 browser.close()
                 return True
 
-            # Fallback to UI clicking
+            # Fallback to UI clicking -- select all 4 slots then confirm
             log.warning("API booking failed -- falling back to UI clicks")
-            # Re-scan since page state may have changed
             page.reload(wait_until="domcontentloaded", timeout=15_000)
             page.wait_for_timeout(3000)
             available = scan_availability(page)
 
-            if not available:
-                log.error("No slots available for UI fallback")
+            # Find court with full block again
+            for court_name, resource_id in PREFERRED_COURTS:
+                court_slots = [s for s in available if s["court_name"] == court_name]
+                if len(court_slots) == len(TARGET_SLOTS_24H):
+                    best_court = (court_name, resource_id)
+                    best_slots = court_slots
+                    break
+            else:
+                log.error("No full block available for UI fallback")
                 browser.close()
                 return False
 
-            best = available[0]
-            ui_success = book_via_ui(page, best["aria_label"], dry_run=False)
+            # Click all 4 slots on the same court
+            for slot in best_slots:
+                cell = page.locator(f"[aria-label='{slot['aria_label']}']").first
+                cell.click()
+                page.wait_for_timeout(500)
+                log.info(f"  Clicked: {slot['aria_label']}")
 
-            if ui_success:
+            screenshot(page, "all_slots_selected")
+
+            # Fill event name
+            event_input = page.locator("input[type='text']").last
+            event_input.fill("Pickleball")
+            page.wait_for_timeout(500)
+
+            # Click Confirm bookings
+            confirm_btn = page.locator("button:has-text('Confirm bookings'), button:has-text('Confirm Bookings')")
+            for _ in range(5):
+                if confirm_btn.count() > 0:
+                    break
+                page.wait_for_timeout(1000)
+
+            if confirm_btn.count() > 0:
+                log.info("Clicking 'Confirm bookings'")
+                confirm_btn.first.click()
+                page.wait_for_timeout(3000)
+                screenshot(page, "after_confirm")
+            else:
+                log.error("No confirm button found")
+                browser.close()
+                return False
+
+            # Handle waiver
+            waiver_cb = page.locator("input[type='checkbox']")
+            if waiver_cb.count() > 0:
+                waiver_cb.first.check()
+                page.wait_for_timeout(500)
+
+            reserve_btn = page.locator("button:has-text('Reserve'), button:has-text('Submit')")
+            if reserve_btn.count() > 0:
+                reserve_btn.first.click()
+                page.wait_for_timeout(5000)
+                screenshot(page, "reserved")
                 log.info("=" * 60)
-                log.info("BOOKING SUCCESSFUL (UI)")
-                log.info(f"  {best['court_name']} @ {best['start_display']}-{best['end_display']}")
+                log.info("BOOKING SUCCESSFUL (UI) -- 2 hour block")
+                log.info(f"  {best_court[0]} @ 4:00-6:00 PM")
                 log.info(f"  Date: {date_str}")
                 log.info("=" * 60)
-                screenshot(page, "booking_success_ui")
-            else:
-                log.error("BOOKING FAILED -- both API and UI paths exhausted")
-                screenshot(page, "booking_failed")
+                browser.close()
+                return True
 
+            log.error("BOOKING FAILED -- both API and UI paths exhausted")
+            screenshot(page, "booking_failed")
             browser.close()
-            return ui_success
+            return False
 
         except PlaywrightTimeout as e:
             log.error(f"Timeout: {e}")
