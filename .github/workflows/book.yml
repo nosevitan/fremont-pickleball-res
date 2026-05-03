@@ -43,6 +43,7 @@ jobs:
           ACTIVENET_USERNAME=${{ secrets.ACTIVENET_USERNAME }}
           ACTIVENET_PASSWORD=${{ secrets.ACTIVENET_PASSWORD }}
           ACTIVENET_CUSTOMER_ID=${{ secrets.ACTIVENET_CUSTOMER_ID }}
+          ACTIVENET_CCV=${{ secrets.ACTIVENET_CCV }}
           EOF
 
       - name: Run booking script

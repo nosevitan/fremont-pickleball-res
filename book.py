@@ -38,6 +38,7 @@ QUICK_RES_URL = f"{BASE_URL}/reservation/landing/quick?groupId=6"
 USERNAME = os.getenv("ACTIVENET_USERNAME", "")
 PASSWORD = os.getenv("ACTIVENET_PASSWORD", "")
 CUSTOMER_ID = int(os.getenv("ACTIVENET_CUSTOMER_ID", "86022"))
+CCV = os.getenv("ACTIVENET_CCV", "")
 
 TOGGLE_FILE = Path(__file__).parent / "toggle.json"
 DAYS_AHEAD = 7
@@ -530,6 +531,175 @@ def book_via_ui(page, aria_label: str, dry_run: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Handle waiver dialog (checkboxes + signature + save)
+# ---------------------------------------------------------------------------
+def handle_waiver_ui(page) -> bool:
+    """Check waiver checkboxes, draw signature, click Save."""
+    log.info("Handling waiver dialog ...")
+    page.wait_for_timeout(2000)
+
+    # Check all waiver checkboxes
+    checkboxes = page.locator("input[type='checkbox']")
+    count = checkboxes.count()
+    for i in range(count):
+        if not checkboxes.nth(i).is_checked():
+            checkboxes.nth(i).check()
+            log.info(f"  Checked waiver checkbox {i + 1}/{count}")
+    page.wait_for_timeout(500)
+
+    # Draw signature on canvas using pointer events
+    canvas = page.locator("canvas")
+    if canvas.count() > 0:
+        log.info("  Drawing signature on canvas ...")
+        page.evaluate("""
+            () => {
+                const canvas = document.querySelector('canvas');
+                if (!canvas) return;
+                const rect = canvas.getBoundingClientRect();
+                function fire(type, x, y) {
+                    canvas.dispatchEvent(new PointerEvent(type, {
+                        bubbles: true, cancelable: true,
+                        pointerId: 1, pointerType: 'mouse', pressure: 0.5,
+                        clientX: rect.left + x, clientY: rect.top + y
+                    }));
+                }
+                fire('pointerdown', 80, 80);
+                for (let i = 0; i <= 40; i++) {
+                    fire('pointermove', 80 + i * 8, 80 + Math.sin(i * 0.4) * 25);
+                }
+                fire('pointerup', 400, 80);
+            }
+        """)
+        page.wait_for_timeout(500)
+
+    screenshot(page, "waiver_filled")
+
+    # Click Save
+    save_btn = page.locator("button:has-text('Save')")
+    if save_btn.count() > 0:
+        log.info("  Clicking Save ...")
+        save_btn.first.click()
+        page.wait_for_timeout(5000)
+        screenshot(page, "waiver_saved")
+        return True
+
+    log.warning("  No Save button found")
+    screenshot(page, "waiver_no_save")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Handle payment (select saved card, enter CCV, submit)
+# ---------------------------------------------------------------------------
+def handle_payment(page) -> bool:
+    """Complete the payment page: select saved card, enter CCV, submit."""
+    log.info("Handling payment ...")
+    page.wait_for_timeout(3000)
+    screenshot(page, "payment_page")
+
+    if not CCV:
+        log.error("No CCV configured. Set ACTIVENET_CCV in .env or GitHub Secrets.")
+        return False
+
+    # Use account credit first if available
+    credit_checkbox = page.locator("input[type='checkbox'][id*='credit'], label:has-text('credit') input[type='checkbox']")
+    if credit_checkbox.count() > 0:
+        log.info("  Checking 'use account credit' box ...")
+        if not credit_checkbox.first.is_checked():
+            credit_checkbox.first.check()
+        page.wait_for_timeout(1000)
+
+    # Select saved credit card (if there's a dropdown/radio)
+    saved_card = page.locator("input[type='radio'][name*='card'], input[type='radio'][name*='payment'], [class*='saved-card'] input[type='radio']")
+    if saved_card.count() > 0:
+        log.info(f"  Selecting saved card (first of {saved_card.count()}) ...")
+        saved_card.first.check()
+        page.wait_for_timeout(1000)
+
+    # Look for CCV/CVV input field
+    ccv_input = page.locator(
+        "input[name*='cvv'], input[name*='ccv'], input[name*='cvc'], "
+        "input[name*='CVV'], input[name*='CCV'], input[name*='CVC'], "
+        "input[placeholder*='CVV'], input[placeholder*='CCV'], input[placeholder*='CVC'], "
+        "input[placeholder*='Security'], input[aria-label*='CVV'], input[aria-label*='security'], "
+        "input[id*='cvv'], input[id*='ccv'], input[id*='cvc'], "
+        "input[id*='securityCode'], input[id*='security_code']"
+    )
+
+    if ccv_input.count() == 0:
+        # Try broader search — find short number inputs near "security" text
+        log.info("  CCV input not found by name, searching by context ...")
+        ccv_input = page.locator("input[type='text'][maxlength='3'], input[type='text'][maxlength='4'], input[type='tel'][maxlength='3'], input[type='tel'][maxlength='4'], input[type='password'][maxlength='3'], input[type='password'][maxlength='4']")
+
+    if ccv_input.count() > 0:
+        log.info(f"  Found CCV input, entering code ...")
+        ccv_input.first.fill(CCV)
+        page.wait_for_timeout(500)
+    else:
+        log.warning("  Could not find CCV input field")
+        screenshot(page, "no_ccv_field")
+        # Continue anyway — might not need CCV if credit covers it
+
+    screenshot(page, "payment_filled")
+
+    # Handle signature on payment page if present
+    canvas = page.locator("canvas")
+    if canvas.count() > 0:
+        log.info("  Drawing payment signature ...")
+        page.evaluate("""
+            () => {
+                const canvas = document.querySelector('canvas');
+                if (!canvas) return;
+                const rect = canvas.getBoundingClientRect();
+                function fire(type, x, y) {
+                    canvas.dispatchEvent(new PointerEvent(type, {
+                        bubbles: true, cancelable: true,
+                        pointerId: 1, pointerType: 'mouse', pressure: 0.5,
+                        clientX: rect.left + x, clientY: rect.top + y
+                    }));
+                }
+                fire('pointerdown', 80, 80);
+                for (let i = 0; i <= 40; i++) {
+                    fire('pointermove', 80 + i * 8, 80 + Math.sin(i * 0.4) * 25);
+                }
+                fire('pointerup', 400, 80);
+            }
+        """)
+        page.wait_for_timeout(500)
+
+    # Click Pay / Submit / Complete
+    pay_btn = page.locator(
+        "button:has-text('Pay'), button:has-text('Complete'), "
+        "button:has-text('Submit'), button:has-text('Place Order'), "
+        "button:has-text('Checkout'), button:has-text('Process')"
+    )
+    if pay_btn.count() > 0:
+        log.info("  Clicking Pay/Submit ...")
+        pay_btn.first.click()
+        page.wait_for_timeout(8000)
+        screenshot(page, "payment_submitted")
+
+        # Check for success
+        if page.locator("text=Confirmation").count() > 0 or page.locator("text=Thank you").count() > 0 or page.locator("text=confirmed").count() > 0:
+            log.info("  PAYMENT SUCCESSFUL!")
+            return True
+
+        # Check for errors
+        if page.locator("text=declined").count() > 0 or page.locator("text=error").count() > 0:
+            log.error("  Payment was declined or errored")
+            screenshot(page, "payment_error")
+            return False
+
+        log.info("  Payment submitted — checking result ...")
+        screenshot(page, "payment_result")
+        return True
+
+    log.warning("  No Pay/Submit button found")
+    screenshot(page, "no_pay_button")
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
 def run(dry_run: bool = False, target_date=None, skip_wait: bool = False):
@@ -755,26 +925,29 @@ def run(dry_run: bool = False, target_date=None, skip_wait: bool = False):
                 browser.close()
                 return False
 
-            # Handle waiver
-            waiver_cb = page.locator("input[type='checkbox']")
-            if waiver_cb.count() > 0:
-                waiver_cb.first.check()
-                page.wait_for_timeout(500)
+            # Handle waiver dialog
+            waiver_dialog = page.locator("text=Waiver and information")
+            if waiver_dialog.count() > 0:
+                if not handle_waiver_ui(page):
+                    log.error("Waiver handling failed")
+                    browser.close()
+                    return False
 
-            reserve_btn = page.locator("button:has-text('Reserve'), button:has-text('Submit')")
-            if reserve_btn.count() > 0:
-                reserve_btn.first.click()
-                page.wait_for_timeout(5000)
-                screenshot(page, "reserved")
+            # Handle payment
+            log.info("--- Phase 5: Payment ---")
+            payment_success = handle_payment(page)
+
+            if payment_success:
                 log.info("=" * 60)
-                log.info("BOOKING SUCCESSFUL (UI) -- 2 hour block")
+                log.info("BOOKING + PAYMENT SUCCESSFUL!")
                 log.info(f"  {best_court[0]} @ 4:00-6:00 PM")
                 log.info(f"  Date: {date_str}")
                 log.info("=" * 60)
+                screenshot(page, "booking_complete")
                 browser.close()
                 return True
 
-            log.error("BOOKING FAILED -- both API and UI paths exhausted")
+            log.error("BOOKING FAILED -- payment did not complete")
             screenshot(page, "booking_failed")
             browser.close()
             return False
